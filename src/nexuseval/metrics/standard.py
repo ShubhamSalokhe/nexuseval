@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from ..core import TestCase, MetricResult
 from ..llm import LLMClient
-from ..templates import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT
+from ..templates import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT, COMPLETENESS_PROMPT
 
 class BaseMetric(ABC):
     def __init__(self, name: str, threshold: float = 0.5):
@@ -55,5 +55,31 @@ class AnswerRelevance(BaseMetric):
             metric_name=self.name,
             score=score,
             reason=result.get("reason", "No reason"),
+            passed=score >= self.threshold
+        )
+
+
+class Completeness(BaseMetric):
+    """
+    Checks if the LLM answered ALL parts of the user's question.
+    """
+    def __init__(self):
+        super().__init__("Completeness", threshold=0.7)
+
+    async def measure(self, test_case: TestCase) -> MetricResult:
+        # Format the prompt using the user input and the model output
+        formatted_prompt = COMPLETENESS_PROMPT.format(
+            input_text=test_case.input_text,
+            output=test_case.actual_output
+        )
+        
+        # Call the Async LLM Client
+        result = await self.llm.get_score(formatted_prompt)
+        score = result.get("score", 0.0)
+        
+        return MetricResult(
+            metric_name=self.name,
+            score=score,
+            reason=result.get("reason", "No reason provided"),
             passed=score >= self.threshold
         )

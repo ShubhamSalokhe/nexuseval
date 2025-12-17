@@ -38,3 +38,25 @@ Return valid JSON only:
     "reason": "<concise explanation>"
 }}
 """
+
+COMPLETENESS_PROMPT = """
+You are a strict evaluator checking for logical completeness.
+Your task is to determine if the 'Actual Output' addresses ALL parts of the 'User Input'.
+
+USER INPUT:
+{input_text}
+
+ACTUAL OUTPUT:
+{output}
+
+STEPS:
+1. Analyze the User Input and list all distinct questions, constraints, or instructions.
+2. Check if the Actual Output addresses each item from Step 1.
+3. If any part is missed or ignored, the answer is incomplete.
+
+Return valid JSON only:
+{{
+    "score": <float between 0.0 and 1.0>,
+    "reason": "<List what was missed, if anything>"
+}}
+"""

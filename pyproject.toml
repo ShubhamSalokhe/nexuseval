@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nexuseval"
-version = "0.2.0"
+version = "0.3.0"
 description = "An open-source LLM evaluation framework."
 authors = [{name = "Shubham Salokhe", email = "shubhamsalokhe@ymail.com"}]
 readme = "README.md"
