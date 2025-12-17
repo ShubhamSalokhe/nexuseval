@@ -15,60 +15,27 @@ from typing import Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 class LLMConfig(BaseModel):
-    """
-    Configuration for LLM clients.
-    """
-    provider: Literal["openai", "anthropic", "google", "ollama"] = Field(
-        default="openai",
-        description="LLM provider to use"
-    )
-    model: str = Field(
-        default="gpt-4-turbo",
-        description="Model name/identifier"
-    )
-    api_key: Optional[str] = Field(
-        default=None,
-        description="API key (will use env var if not specified)"
-    )
-    base_url: Optional[str] = Field(
-        default=None,
-        description="Custom base URL for the API"
-    )
-    temperature: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=2.0,
-        description="Sampling temperature"
-    )
-    max_tokens: int = Field(
-        default=1000,
-        ge=1,
-        description="Maximum tokens in response"
-    )
-    timeout: int = Field(
-        default=30,
-        ge=1,
-        description="Request timeout in seconds"
-    )
+    """Configuration for LLM client."""
     
-    def get_api_key(self) -> Optional[str]:
-        """Get API key from config or environment."""
-        if self.api_key:
-            return self.api_key
-        
-        # Try environment variables based on provider
-        env_vars = {
-            "openai": "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "ollama": None  # Local, no key needed
-        }
-        
-        env_var = env_vars.get(self.provider)
-        if env_var:
-            return os.getenv(env_var)
-        
-        return None
+    provider: Literal["openai", "anthropic", "google", "groq", "ollama"] = "openai"
+    model: str = "gpt-4-turbo"
+    api_key: Optional[str] = None
+    
+    # Provider-specific options
+    base_url: Optional[str] = None  # For Ollama, Azure OpenAI
+    region: Optional[str] = None  # For AWS Bedrock (future)
+    
+    # Generation parameters
+    temperature: float = 0.0
+    max_tokens: int = 1000
+    timeout: int = 30
+    
+    # Retry configuration
+    max_retries: int = 3
+    retry_delay: float = 1.0
+    
+    class Config:
+        extra = "allow"  # Allow provider-specific extras
 
 
 class CacheConfig(BaseModel):
