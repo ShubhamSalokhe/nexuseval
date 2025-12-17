@@ -1,9 +1,14 @@
-import os
-import json
+"""
+Enhanced LLM client with multi-provider support, caching, and cost tracking.
+
+This module provides a unified interface for accessing multiple LLM providers
+(OpenAI, Anthropic, Google, Groq, Ollama) with intelligent caching and cost tracking.
+"""
+
 import asyncio
-from openai import AsyncOpenAI
 from typing import Dict, Any, Optional
-import time
+from .providers import LLMProviderRegistry, BaseLLMProvider
+from .config import LLMConfig
 
 # Import cache if available
 try:
@@ -14,46 +19,88 @@ except ImportError:
 
 class LLMClient:
     """
-    Enhanced LLM client with caching, cost tracking, and retry logic.
-    """
+    Unified LLM client supporting multiple providers.
     
-    # Pricing per 1K tokens (approximate, update as needed)
-    PRICING = {
-        "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-        "gpt-4": {"input": 0.03, "output": 0.06},
-        "gpt-4o": {"input": 0.005, "output": 0.015},
-        "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-        "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
-    }
+    Supports: OpenAI, Anthropic (Claude), Google (Gemini), Groq, Ollama
+    
+    Features:
+    - Multi-provider support with seamless switching
+    - Intelligent caching to reduce costs
+    - Automatic cost tracking
+    - Retry logic with exponential backoff
+    """
     
     def __init__(
         self,
         model: str = "gpt-4-turbo",
+        provider: str = "openai",
+        config: Optional[LLMConfig] = None,
         cache_manager: Optional['CacheManager'] = None,
         enable_cache: bool = True,
         enable_cost_tracking: bool = False,
-        max_retries: int = 3,
-        retry_delay: float = 1.0
+        **kwargs
     ):
         """
+        Initialize LLM client.
+        
         Args:
-            model: OpenAI model name
-            cache_manager: Optional cache manager (creates default if None and caching enabled)
+            model: Model identifier (e.g., "gpt-4-turbo", "claude-3-5-sonnet-20241022")
+            provider: Provider name ("openai", "anthropic", "google", "groq", "ollama")
+            config: Optional LLMConfig object (overrides model/provider if provided)
+            cache_manager: Optional cache manager
             enable_cache: Whether to use caching
             enable_cost_tracking: Whether to track API costs
-            max_retries: Maximum number of retry attempts
-            retry_delay: Initial delay between retries (exponential backoff)
-        """
-        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = model
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
+            **kwargs: Additional provider-specific parameters
         
-        # Cost tracking
+        Examples:
+            >>> # OpenAI (default)
+            >>> client = LLMClient()
+            
+            >>> # Claude
+            >>> client = LLMClient(
+            ...     provider="anthropic",
+            ...     model="claude-3-5-sonnet-20241022"
+            ... )
+            
+            >>> # Gemini
+            >>> client = LLMClient(
+            ...     provider="google",
+            ...     model="gemini-1.5-pro"
+            ... )
+            
+            >>> # Local with Ollama
+            >>> client = LLMClient(
+            ...     provider="ollama",
+            ...     model="llama3",
+            ...     base_url="http://localhost:11434"
+            ... )
+        """
+        # Use config if provided
+        if config:
+            provider = config.provider
+            model = config.model
+            kwargs.update({
+                "api_key": config.api_key,
+                "base_url": config.base_url,
+                "temperature": config.temperature,
+                "max_tokens": config.max_tokens,
+                "timeout": config.timeout,
+                "max_retries": config.max_retries,
+                "retry_delay": config.retry_delay,
+            })
+            # Remove None values
+            kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        
+        # Create provider instance
+        self.provider: BaseLLMProvider = LLMProviderRegistry.create(
+            provider=provider,
+            model=model,
+            **kwargs
+        )
+        
+        self.model = model
+        self.provider_name = provider
         self.enable_cost_tracking = enable_cost_tracking
-        self.total_cost = 0.0
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
         
         # Caching
         self.enable_cache = enable_cache and CACHE_AVAILABLE
@@ -66,24 +113,34 @@ class LLMClient:
                 self.cache_manager = cache_manager
         else:
             self.cache_manager = None
-
+    
     async def get_score(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """
-        Sends a prompt to the LLM and enforces a JSON response.
-        Includes retry logic, caching, and cost tracking.
+        Generate structured JSON response from LLM.
+        
+        This is the main method for evaluation tasks. It ensures JSON output
+        and handles caching, retries, and cost tracking automatically.
         
         Args:
-            prompt: The prompt to send
-            **kwargs: Additional parameters (temperature, max_tokens, etc.)
+            prompt: The prompt to send (should request JSON format)
+            **kwargs: Additional generation parameters (temperature, max_tokens, etc.)
         
         Returns:
-            Dict containing the LLM response (parsed JSON)
+            Dict containing the parsed JSON response
+        
+        Example:
+            >>> client = LLMClient()
+            >>> result = await client.get_score(
+            ...     "Evaluate this response and return JSON with score and reason..."
+            ... )
+            >>> print(result["score"])
         """
         # Generate cache key if caching enabled
         if self.enable_cache and self.cache_manager:
             cache_key = self.cache_manager.generate_key(
                 prompt=prompt,
                 model=self.model,
+                provider=self.provider_name,
                 **kwargs
             )
             
@@ -92,83 +149,84 @@ class LLMClient:
             if cached_result is not None:
                 return cached_result
         
-        # Call LLM with retry logic
-        for attempt in range(self.max_retries):
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=kwargs.get("temperature", 0.0),
-                    max_tokens=kwargs.get("max_tokens", 1000),
-                    response_format={"type": "json_object"}
-                )
-                
-                content = response.choices[0].message.content
-                result = json.loads(content)
-                
-                # Track costs if enabled
-                if self.enable_cost_tracking and hasattr(response, 'usage'):
-                    cost = self._calculate_cost(response.usage)
-                    self.total_cost += cost
-                    self.total_input_tokens += response.usage.prompt_tokens
-                    self.total_output_tokens += response.usage.completion_tokens
-                
-                # Cache result if caching enabled
-                if self.enable_cache and self.cache_manager:
-                    await self.cache_manager.backend.set(cache_key, result)
-                
-                return result
-                
-            except json.JSONDecodeError as e:
-                # LLM returned invalid JSON
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"Invalid JSON response: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
-                
-            except Exception as e:
-                # API error or other exception
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"LLM Error: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
+        # Call provider
+        result = await self.provider.generate_json(prompt, **kwargs)
         
-        return {"score": 0.0, "reason": "Max retries exceeded"}
+        # Cache result if caching enabled
+        if self.enable_cache and self.cache_manager:
+            await self.cache_manager.backend.set(cache_key, result)
+        
+        return result
     
-    def _calculate_cost(self, usage) -> float:
+    async def generate(self, prompt: str, **kwargs) -> str:
         """
-        Calculate cost based on token usage.
+        Generate text completion.
         
         Args:
-            usage: OpenAI usage object
+            prompt: The prompt to send
+            **kwargs: Additional generation parameters
         
         Returns:
-            Cost in USD
+            Generated text
         """
-        if self.model not in self.PRICING:
-            return 0.0
-        
-        pricing = self.PRICING[self.model]
-        input_cost = (usage.prompt_tokens / 1000) * pricing["input"]
-        output_cost = (usage.completion_tokens / 1000) * pricing["output"]
-        
-        return input_cost + output_cost
+        return await self.provider.generate(prompt, **kwargs)
     
     def get_cost_stats(self) -> Dict[str, Any]:
         """
-        Get cost tracking statistics.
+        Get cost and usage statistics.
         
         Returns:
-            Dict with cost and token statistics
+            Dict with cost and token information
+        
+        Example:
+            >>> stats = client.get_cost_stats()
+            >>> print(f"Total cost: ${stats['total_cost_usd']:.4f}")
+            >>> print(f"Total tokens: {stats['total_tokens']:,}")
         """
-        return {
-            "total_cost_usd": round(self.total_cost, 4),
-            "total_input_tokens": self.total_input_tokens,
-            "total_output_tokens": self.total_output_tokens,
-            "total_tokens": self.total_input_tokens + self.total_output_tokens,
-            "model": self.model
-        }
+        return self.provider.get_usage_stats()
     
     def reset_cost_stats(self):
         """Reset cost tracking statistics."""
-        self.total_cost = 0.0
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
+        self.provider.reset_usage()
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics.
+        
+        Returns:
+            Dict with cache hit rate and other statistics
+        """
+        if self.cache_manager:
+            return self.cache_manager.backend.get_stats()
+        return {"enabled": False}
+    
+    @staticmethod
+    def list_providers() -> Dict[str, bool]:
+        """
+        List all available providers.
+        
+        Returns:
+            Dict mapping provider names to availability status
+        
+        Example:
+            >>> providers = LLMClient.list_providers()
+            >>> for name, available in providers.items():
+            ...     print(f"{name}: {'✓' if available else '✗ (not installed)'}")
+        """
+        return LLMProviderRegistry.list_providers()
+    
+    @staticmethod
+    def get_installation_instructions(provider: str) -> str:
+        """
+        Get installation instructions for a provider.
+        
+        Args:
+            provider: Provider name
+        
+        Returns:
+            Installation instructions
+        """
+        return LLMProviderRegistry.get_installation_instructions(provider)
+    
+    def __repr__(self) -> str:
+        return f"LLMClient(provider='{self.provider_name}', model='{self.model}')"

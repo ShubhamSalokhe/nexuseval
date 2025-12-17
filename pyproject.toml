@@ -28,6 +28,20 @@ dependencies = [
   "pydantic>=2.0.0"
 ]
 
+[project.optional-dependencies]
+providers = [
+  "anthropic>=0.39.0",  # For Claude models
+  "google-generativeai>=0.8.0",  # For Gemini models
+  "groq>=0.12.0",  # For Groq (ultra-fast inference)
+  "aiohttp>=3.9.0",  # For Ollama (local models)
+]
+all = [
+  "anthropic>=0.39.0",
+  "google-generativeai>=0.8.0",
+  "groq>=0.12.0",
+  "aiohttp>=3.9.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/ShubhamSalokhe/nexuseval"
 Issues = "https://github.com/ShubhamSalokhe/nexuseval/issues"
