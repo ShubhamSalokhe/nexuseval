@@ -3,7 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/nexuseval.svg)](https://badge.fury.io/py/nexuseval)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-57%20passed-brightgreen)](./tests)
+[![Tests](https://img.shields.io/badge/tests-67%20passed-brightgreen)](./tests)
 
 **The production-ready framework for evaluating RAG pipelines and LLM reliability.**
 
@@ -17,10 +17,12 @@ NexusEval helps developers measure the quality of their Large Language Model app
 |---------|---------|
 | 🚀 **60-80% Cost Reduction** | Smart caching eliminates redundant API calls |
 | ⚡ **3-5x Faster** | Async processing + cache = blazing speed |
-| 📊 **Dataset Management** | Load from JSON/CSV/JSONL - ready in seconds |
+| � **Multi-Provider Support** | 5 LLM providers: OpenAI, Anthropic, Google, Groq, Ollama |
+| �📊 **Dataset Management** | Load from JSON/CSV/JSONL - ready in seconds |
+| 🎯 **Advanced Metrics** | 8 metrics including bias/toxicity detection |
 | 💰 **Cost Tracking** | Monitor every dollar spent on evaluation |
-| 🎯 **Production Ready** | Preset configs for dev, staging, and production |
-| ✅ **100% Test Coverage** | 57 tests ensure reliability |
+| � **Production Ready** | Preset configs for dev, staging, and production |
+| ✅ **Comprehensive Tests** | 67 tests ensure reliability |
 
 ---
 
@@ -57,10 +59,21 @@ print(results)
 
 ## 📦 Installation
 
-### Standard Installation
+### Standard Installation (OpenAI only)
 
 ```bash
 pip install nexuseval
+```
+
+### With All Providers
+
+```bash
+# Install with all LLM provider support
+pip install nexuseval[all]
+
+# Or install specific providers
+pip install nexuseval[providers]  # All LLM providers
+pip install nexuseval[embeddings]  # For SemanticSimilarity metric
 ```
 
 ### Development Installation
@@ -68,18 +81,104 @@ pip install nexuseval
 ```bash
 git clone https://github.com/ShubhamSalokhe/nexuseval.git
 cd nexuseval
-pip install -e .
+pip install -e ".[all]"  # Install with all extras
 pip install pytest pytest-asyncio  # For running tests
 ```
 
 ### Requirements
 
 - Python 3.9+
-- OpenAI API key (set as `OPENAI_API_KEY` environment variable)
+- OpenAI API key (set as `OPENAI_API_KEY` environment variable) - **Required**
+- Optional API keys for other providers:
+  - `ANTHROPIC_API_KEY` for Claude
+  - `GOOGLE_API_KEY` for Gemini
+  - `GROQ_API_KEY` for Groq
+  - Ollama running locally for local models
 
 ---
 
-## 🆕 What's New in v0.4.0
+## 🆕 What's New in v0.5.0
+
+### 🔌 Multi-Provider LLM Support
+
+Switch between 5 LLM providers seamlessly:
+
+```python
+from nexuseval import LLMClient
+
+# OpenAI (default)
+client = LLMClient()  # Uses gpt-4-turbo
+
+# Anthropic Claude
+client = LLMClient(provider="anthropic", model="claude-3-5-sonnet-20241022")
+
+# Google Gemini (cheapest!)
+client = LLMClient(provider="google", model="gemini-1.5-flash")
+
+# Groq (ultra-fast)
+client = LLMClient(provider="groq", model="llama-3.3-70b-versatile")
+
+# Ollama (local, free!)
+client = LLMClient(provider="ollama", model="llama3")
+```
+
+**Install optional providers:**
+```bash
+# All providers
+pip install nexuseval[all]
+
+# Or individually
+pip install anthropic  # Claude
+pip install google-generativeai  # Gemini
+pip install groq  # Groq
+pip install aiohttp  # Ollama
+```
+
+**Cost Comparison (1000 evaluations):**
+| Provider | Model | Cost |
+|----------|-------|------|
+| OpenAI | gpt-4-turbo | ~$15.00 |
+| OpenAI | gpt-4o-mini | ~$0.50 |
+| Anthropic | claude-3-5-sonnet | ~$10.00 |
+| Google | gemini-1.5-flash | **~$0.20** ⭐ |
+| Groq | llama-3.3-70b | ~$0.70 |
+| Ollama | llama3 (local) | **FREE** 🎉 |
+
+### 🎯 Advanced Metrics (5 New)
+
+Beyond the standard triad, now includes:
+
+```python
+from nexuseval import (
+    ContextRelevance,      # Measures retrieval precision
+    SemanticSimilarity,    # Embedding-based comparison
+    BiasDetection,         # Detects 6 bias types
+    ToxicityDetection,     # Flags harmful content
+    FactualConsistency     # Verifies claims against context
+)
+
+# Context Relevance - checks retrieval quality
+metric = ContextRelevance(threshold=0.7)
+result = await metric.measure(test_case)
+
+# Semantic Similarity - compare with expected output
+metric = SemanticSimilarity(embedding_provider="openai")
+
+# Bias Detection - automatic safety checks
+metric = BiasDetection()
+
+# Use with evaluator
+evaluator = Evaluator(metrics=[
+    Faithfulness(),
+    ContextRelevance(),
+    BiasDetection()
+])
+```
+
+**Install embeddings support:**
+```bash
+pip install nexuseval[embeddings]  # For SemanticSimilarity
+```
 
 ### 📊 Dataset Management
 
@@ -156,13 +255,23 @@ print(f"Total tokens: {cost_stats['total_tokens']:,}")
 
 ## 📊 Evaluation Metrics
 
-NexusEval focuses on the **RAG Triad** standard.
+### Standard Metrics (RAG Triad)
 
 | Metric | What it Measures | Use Case |
 | --- | --- | --- |
 | **Faithfulness** | Hallucination detection | Ensures answers are grounded in retrieved context |
 | **Answer Relevance** | Response quality | Checks if the answer addresses the question |
 | **Completeness** | Coverage | Verifies all parts of the query were answered |
+
+### Advanced Metrics (NEW in v0.5.0)
+
+| Metric | What it Measures | Threshold |
+| --- | --- | --- |
+| **Context Relevance** | Retrieval precision | 0.7 |
+| **Semantic Similarity** | Answer similarity to expected | 0.8 |
+| **Bias Detection** | Gender, race, religion, age, disability, nationality | 0.0 (no bias) |
+| **Toxicity Detection** | Profanity, threats, hate speech, harassment | 0.0 (no toxicity) |
+| **Factual Consistency** | Claims verified against context | 0.8 |
 
 ### Example: Detecting Incomplete Answers
 
