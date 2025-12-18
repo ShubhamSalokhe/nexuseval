@@ -68,39 +68,39 @@ class OpenAIProvider(BaseLLMProvider):
     
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """Generate structured JSON output."""
-        for attempt in range(self.max_retries):
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=kwargs.get("temperature", 0.0),
-                    max_tokens=kwargs.get("max_tokens", 1000),
-                    response_format={"type": "json_object"}
-                )
-                
-                content = response.choices[0].message.content
-                result = json.loads(content)
-                
-                # Track usage
-                if hasattr(response, 'usage') and response.usage:
-                    self.update_usage(
-                        response.usage.prompt_tokens,
-                        response.usage.completion_tokens
-                    )
-                
-                return result
-                
-            except json.JSONDecodeError as e:
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"Invalid JSON response: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
-                
-            except Exception as e:
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"OpenAI Error: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
+        from ..retry import retry_with_exponential_backoff
         
-        return {"score": 0.0, "reason": "Max retries exceeded"}
+        @retry_with_exponential_backoff(
+            max_retries=self.max_retries,
+            initial_delay=self.retry_delay,
+            errors=(json.JSONDecodeError, Exception),
+            on_error=lambda e, attempt: print(f"Retry attempt {attempt} due to: {str(e)}")
+        )
+        async def _call_api():
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=kwargs.get("temperature", 0.0),
+                max_tokens=kwargs.get("max_tokens", 1000),
+                response_format={"type": "json_object"}
+            )
+            
+            content = response.choices[0].message.content
+            result = json.loads(content)
+            
+            # Track usage
+            if hasattr(response, 'usage') and response.usage:
+                self.update_usage(
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens
+                )
+            
+            return result
+
+        try:
+            return await _call_api()
+        except Exception as e:
+            return {"score": 0.0, "reason": f"Failed after retries: {str(e)}"}
     
     async def chat(self, messages: List[LLMMessage], **kwargs) -> LLMResponse:
         """Chat completion with message history."""

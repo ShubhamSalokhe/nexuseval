@@ -38,6 +38,7 @@ class LLMClient:
         cache_manager: Optional['CacheManager'] = None,
         enable_cache: bool = True,
         enable_cost_tracking: bool = False,
+        verbose: bool = False,
         **kwargs
     ):
         """
@@ -49,31 +50,9 @@ class LLMClient:
             config: Optional LLMConfig object (overrides model/provider if provided)
             cache_manager: Optional cache manager
             enable_cache: Whether to use caching
-            enable_cost_tracking: Whether to track API costs
+            enable_cost_tracking: Whether to use cost tracking
+            verbose: Whether to print detailed prompts and responses
             **kwargs: Additional provider-specific parameters
-        
-        Examples:
-            >>> # OpenAI (default)
-            >>> client = LLMClient()
-            
-            >>> # Claude
-            >>> client = LLMClient(
-            ...     provider="anthropic",
-            ...     model="claude-3-5-sonnet-20241022"
-            ... )
-            
-            >>> # Gemini
-            >>> client = LLMClient(
-            ...     provider="google",
-            ...     model="gemini-1.5-pro"
-            ... )
-            
-            >>> # Local with Ollama
-            >>> client = LLMClient(
-            ...     provider="ollama",
-            ...     model="llama3",
-            ...     base_url="http://localhost:11434"
-            ... )
         """
         # Use config if provided
         if config:
@@ -101,6 +80,7 @@ class LLMClient:
         self.model = model
         self.provider_name = provider
         self.enable_cost_tracking = enable_cost_tracking
+        self.verbose = verbose
         
         # Caching
         self.enable_cache = enable_cache and CACHE_AVAILABLE
@@ -150,7 +130,14 @@ class LLMClient:
                 return cached_result
         
         # Call provider
+        if self.verbose:
+            print(f"\n[NexusEval] 📤 Request to {self.provider_name}/{self.model}:\n{prompt}\n")
+            
         result = await self.provider.generate_json(prompt, **kwargs)
+
+        if self.verbose:
+            import json
+            print(f"\n[NexusEval] 📥 Response:\n{json.dumps(result, indent=2)}\n")
         
         # Cache result if caching enabled
         if self.enable_cache and self.cache_manager:
