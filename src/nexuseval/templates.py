@@ -10,21 +10,23 @@ CONTEXT:
 ACTUAL OUTPUT:
 {output}
 
-STEPS:
-1. Break down the Actual Output into individual statements.
-2. For each statement, check if it is supported by the Context.
-3. If ANY statement is not supported, it is a Hallucination.
+INSTRUCTIONS:
+1. Think step-by-step. Analyze the Actual Output statement by statement.
+2. For each statement, identify the specific sentence in the CONTEXT that supports it.
+3. If a statement is not supported by the Context, it is a Hallucination.
+4. Provide a 'concise_reason' that cites specific parts of the context.
 
 Return valid JSON only:
 {{
     "score": <float between 0.0 and 1.0>,
-    "reason": "<concise explanation>"
+    "reason": "<step-by-step reasoning>",
+    "citations": ["<list of supporting context snippets>"]
 }}
 """
 
 RELEVANCE_PROMPT = """
 You are an expert evaluator. Determine if the 'Actual Output' is relevant to the 'User Input'.
-Ignore whether the answer is factually true; focus ONLY on whether it addresses the question asked.
+Ignore whether the answer is factually true; focus ONLY on whether it addresses the problem/question asked.
 
 USER INPUT:
 {input_text}
@@ -32,10 +34,14 @@ USER INPUT:
 ACTUAL OUTPUT:
 {output}
 
+INSTRUCTIONS:
+1. Think step-by-step. Does the output directly answer the specific question?
+2. If it is vague, evasive, or off-topic, score it low.
+
 Return valid JSON only:
 {{
     "score": <float between 0.0 and 1.0>,
-    "reason": "<concise explanation>"
+    "reason": "<step-by-step reasoning>"
 }}
 """
 
@@ -49,15 +55,16 @@ USER INPUT:
 ACTUAL OUTPUT:
 {output}
 
-STEPS:
-1. Analyze the User Input and list all distinct questions, constraints, or instructions.
-2. Check if the Actual Output addresses each item from Step 1.
-3. If any part is missed or ignored, the answer is incomplete.
+INSTRUCTIONS:
+1. Think step-by-step. Decompose the User Input into individual requirements (questions, constraints, instructions).
+2. Check if the Actual Output addresses each requirement.
+3. List any missing parts.
 
 Return valid JSON only:
 {{
     "score": <float between 0.0 and 1.0>,
-    "reason": "<List what was missed, if anything>"
+    "reason": "<step-by-step reasoning>",
+    "missing_points": ["<list of valid missing points>"]
 }}
 """
 

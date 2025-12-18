@@ -85,52 +85,52 @@ class AnthropicProvider(BaseLLMProvider):
         
         Note: Claude doesn't have native JSON mode, so we use prompt engineering.
         """
+        from ..retry import retry_with_exponential_backoff
+
         system_prompt = (
             "You must respond with valid JSON only. "
             "Do not include any explanatory text before or after the JSON. "
             "Your entire response must be parseable as JSON."
         )
         
-        for attempt in range(self.max_retries):
-            try:
-                response = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=kwargs.get("max_tokens", 1024),
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=kwargs.get("temperature", 0.0),
+        @retry_with_exponential_backoff(
+            max_retries=self.max_retries,
+            initial_delay=self.retry_delay,
+            errors=(json.JSONDecodeError, Exception),
+            on_error=lambda e, attempt: print(f"Retry attempt {attempt} due to: {str(e)}")
+        )
+        async def _call_api():
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=kwargs.get("max_tokens", 1024),
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=kwargs.get("temperature", 0.0),
+            )
+            
+            content = response.content[0].text
+            
+            # Try to extract JSON if wrapped in markdown code blocks
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            
+            result = json.loads(content)
+            
+            # Track usage
+            if hasattr(response, 'usage'):
+                self.update_usage(
+                    response.usage.input_tokens,
+                    response.usage.output_tokens
                 )
-                
-                content = response.content[0].text
-                
-                # Try to extract JSON if wrapped in markdown code blocks
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
-                
-                result = json.loads(content)
-                
-                # Track usage
-                if hasattr(response, 'usage'):
-                    self.update_usage(
-                        response.usage.input_tokens,
-                        response.usage.output_tokens
-                    )
-                
-                return result
-                
-            except json.JSONDecodeError as e:
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"Invalid JSON response: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
-                
-            except Exception as e:
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"Anthropic Error: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
-        
-        return {"score": 0.0, "reason": "Max retries exceeded"}
+            
+            return result
+
+        try:
+            return await _call_api()
+        except Exception as e:
+            return {"score": 0.0, "reason": f"Failed after retries: {str(e)}"}
     
     async def chat(self, messages: List[LLMMessage], **kwargs) -> LLMResponse:
         """Chat completion with message history."""
