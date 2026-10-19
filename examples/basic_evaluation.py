@@ -46,11 +46,12 @@ async def main():
             Faithfulness(),
             AnswerRelevance(),
             Completeness()
-        ]
+        ],
+        config=config,
     )
     
     print("🚀 Running evaluation (first run - will call API)...")
-    results_1 = evaluator.evaluate(dataset.test_cases)
+    results_1 = await evaluator.evaluate_async(dataset.test_cases)
     
     print("\n" + "="*60)
     print("📈 RESULTS (First Run)")
@@ -66,7 +67,7 @@ async def main():
     print("\n" + "="*60)
     print("🚀 Running evaluation again (should use cache)...")
     print("="*60)
-    results_2 = evaluator.evaluate(dataset.test_cases)
+    results_2 = await evaluator.evaluate_async(dataset.test_cases)
     
     print("\n✅ Second run completed (faster due to cache)")
     

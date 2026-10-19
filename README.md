@@ -3,7 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/nexuseval.svg)](https://badge.fury.io/py/nexuseval)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-67%20passed-brightgreen)](./tests)
+[![Tests](https://github.com/ShubhamSalokhe/nexuseval/actions/workflows/tests.yml/badge.svg)](https://github.com/ShubhamSalokhe/nexuseval/actions/workflows/tests.yml)
 
 **The production-ready framework for evaluating RAG pipelines and LLM reliability.**
 
@@ -22,7 +22,7 @@ NexusEval helps developers measure the quality of their Large Language Model app
 | 🎯 **Advanced Metrics** | 8 metrics including bias/toxicity detection |
 | 💰 **Cost Tracking** | Monitor every dollar spent on evaluation |
 | � **Production Ready** | Preset configs for dev, staging, and production |
-| ✅ **Comprehensive Tests** | 67 tests ensure reliability |
+| ✅ **Comprehensive Tests** | Offline regression tests for providers, scoring, datasets, caching, and concurrency |
 
 ---
 
@@ -53,7 +53,7 @@ results = evaluator.evaluate([case])
 print(results)
 ```
 
-**That's it!** Caching is enabled by default, so running this again will be 5x faster and cost 80% less. 💸
+**That's it!** Responses are cached in memory by default. Repeating an evaluation with the same client reuses cached responses; speed and cost savings depend on your workload.
 
 ---
 
@@ -81,14 +81,13 @@ pip install nexuseval[embeddings]  # For SemanticSimilarity metric
 ```bash
 git clone https://github.com/ShubhamSalokhe/nexuseval.git
 cd nexuseval
-pip install -e ".[all]"  # Install with all extras
-pip install pytest pytest-asyncio  # For running tests
+pip install -e ".[all,dev]"  # All providers, embeddings, and test dependencies
 ```
 
 ### Requirements
 
 - Python 3.9+
-- OpenAI API key (set as `OPENAI_API_KEY` environment variable) - **Required**
+- Credentials for your chosen hosted provider. OpenAI uses `OPENAI_API_KEY`. Local metrics and local models do not require an OpenAI key.
 - Optional API keys for other providers:
   - `ANTHROPIC_API_KEY` for Claude
   - `GOOGLE_API_KEY` for Gemini
@@ -212,7 +211,7 @@ train, test = dataset.split(train_ratio=0.8, shuffle=True)
 Automatically cache LLM responses to reduce costs:
 
 ```python
-from nexuseval import NexusConfig
+from nexuseval import NexusConfig, CacheConfig
 
 # Use preset with optimal caching
 config = NexusConfig.preset_development()
@@ -221,10 +220,11 @@ config = NexusConfig.preset_development()
 config = NexusConfig(
     cache=CacheConfig(
         enabled=True,
-        backend="file",  # "memory", "file", or "redis"
+        backend="file",  # "memory", "file", or "none"
         max_size=5000
     )
 )
+evaluator = Evaluator(metrics=[Faithfulness()], config=config)
 ```
 
 **Performance:**
@@ -241,8 +241,8 @@ from nexuseval import NexusConfig
 
 config = NexusConfig.preset_development()  # Cost tracking enabled
 
-# After evaluation
-evaluator = Evaluator(metrics=[Faithfulness()])
+# Pass the configuration to the evaluator
+evaluator = Evaluator(metrics=[Faithfulness()], config=config)
 results = evaluator.evaluate(dataset.test_cases)
 
 # Check costs
@@ -305,14 +305,28 @@ from nexuseval import NexusConfig
 config = NexusConfig.preset_development()
 # Uses: gpt-4o-mini, file cache, verbose output
 
-# 🚀 Production: Best quality, distributed cache
+# 🚀 Production: Best quality, persistent cache
 config = NexusConfig.preset_production()
-# Uses: gpt-4-turbo, Redis cache, high concurrency
+# Uses: gpt-4-turbo, file cache with a 24-hour TTL, high concurrency
 
 # ⚡ Fast: Maximum speed
 config = NexusConfig.preset_fast()
 # Uses: gpt-3.5-turbo, in-memory cache, 30 concurrent requests
 ```
+
+Pass a preset to `Evaluator(metrics=[...], config=config)` to apply it. An explicitly supplied metric client takes precedence over the evaluator configuration. Retry settings in `LLMConfig` take precedence over the legacy evaluation retry settings. Automatic reports and provider rate limiting are reserved for a future release.
+
+### Async Applications and Notebooks
+
+Use the async entry point when an event loop is already running:
+
+```python
+results = await evaluator.evaluate_async(dataset.test_cases)
+```
+
+`max_concurrency` bounds the number of test cases evaluated at once; each case's metrics can make parallel requests. Results preserve dataset order and include each metric's `passed` flag and metadata. Provider errors and malformed metric responses raise exceptions after request retries; they are not scored as successful evaluations.
+
+Bias and toxicity scores measure severity: **0 means none detected**, and a result passes when its score is at or below its threshold. Other metrics use higher scores for better results. Semantic similarity uses cosine similarity clamped to the range 0–1.
 
 ### Bulk Evaluation with Progress Bar
 
@@ -361,6 +375,7 @@ config = NexusConfig(
         max_tokens=500             # Shorter responses
     )
 )
+evaluator = Evaluator(metrics=[Faithfulness()], config=config)
 ```
 
 ---
@@ -431,7 +446,7 @@ pytest tests/test_dataset.py -v
 pytest tests/ --cov=nexuseval --cov-report=html
 ```
 
-**Current Status:** ✅ 57 tests, 100% pass rate
+The default test suite runs offline using SDK and HTTP doubles; no API keys or running model servers are required.
 
 ---
 
@@ -443,7 +458,7 @@ pytest tests/ --cov=nexuseval --cov-report=html
 - Cost tracking
 - Configuration presets
 
-### 🔄 v0.5.0 - Advanced Metrics (Next)
+### ✅ v0.5.0 - Advanced Metrics and Providers (Released)
 - Context Relevance (retrieval precision)
 - Bias Detection
 - Toxicity Detection
@@ -456,10 +471,11 @@ pytest tests/ --cov=nexuseval --cov-report=html
 - Visualization charts
 - Comparative analysis
 
-### 🤖 v0.7.0 - Multi-Model Support
+### ✅ Multi-Model Support (Released in v0.5.0)
 - Anthropic (Claude)
 - Google (Gemini)
-- Local models (Ollama, vLLM)
+- Groq
+- Local models (Ollama)
 - Unified multi-provider interface
 
 ---
@@ -475,21 +491,22 @@ With caching enabled (default), costs are typically:
 
 ### Can I use my own LLM models?
 
-Currently supports OpenAI models. Multi-provider support (Anthropic, Google, local models) is coming in v0.7.0. You can use any OpenAI-compatible endpoint by setting a custom `base_url`.
+Supports OpenAI, Anthropic, Google, Groq, and Ollama. Pass an `LLMClient` to a metric (for example, `Faithfulness(llm=client)`) or pass a `NexusConfig` to the evaluator. OpenAI-compatible endpoints can use a custom `base_url`.
 
 ### How do I disable caching?
 
 ```python
-config = NexusConfig(
-    cache=CacheConfig(enabled=False)
-)
+from nexuseval import CacheConfig
+
+config = NexusConfig(cache=CacheConfig(enabled=False))
+evaluator = Evaluator(metrics=[Faithfulness()], config=config)
 ```
 
 ### Where is the cache stored?
 
 - **Memory cache:** RAM (lost on restart)
 - **File cache:** `.nexuseval_cache/` directory (persistent)
-- **Redis cache:** Your Redis server (distributed)
+Redis is not implemented. Selecting `backend="redis"` raises `NotImplementedError`; production presets use file caching.
 
 ### Is this compatible with existing code?
 
@@ -544,10 +561,10 @@ Built with ❤️ for the AI evaluation community. Special thanks to:
 
 ## 📈 Stats
 
-- **Version:** 0.4.0
+- **Version:** 0.5.0
 - **Python:** 3.9+
 - **License:** MIT
-- **Tests:** 57 (100% passing)
+- **Tests:** Offline suite in [tests/](tests/)
 - **Code Quality:** Type-safe with Pydantic
 - **Performance:** 60-80% cost reduction, 3-5x speed improvement
 

@@ -4,9 +4,18 @@ Tests for multi-provider LLM support.
 
 import pytest
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from nexuseval.providers import LLMProviderRegistry, OpenAIProvider
 from nexuseval.llm import LLMClient
 from nexuseval.config import LLMConfig
+
+
+@pytest.fixture(autouse=True)
+def provider_test_credentials(monkeypatch):
+    # Constructor tests must run offline without using real account credentials.
+    for variable in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.setenv(variable, "test-api-key")
 
 def test_provider_registry_openai():
     """Test that OpenAI provider is always available."""
@@ -71,28 +80,17 @@ def test_llm_client_list_providers():
     assert "ollama" in providers
 
 def test_llm_client_provider_switching():
-    """Test creating clients with different providers."""
-    # This just tests instantiation, not actual API calls
-    try:
-        client1 = LLMClient(provider="openai", model="gpt-4o-mini")
-        assert client1.provider_name == "openai"
-    except Exception as e:
-        if "api_key" in str(e).lower():
-            pytest.skip("OPENAI_API_KEY not set")
-        raise
-    
-    # These will succeed if provider packages are installed
-    try:
-        client2 = LLMClient(provider="anthropic", model="claude-3-haiku-20240307")
-        assert client2.provider_name == "anthropic"
-    except ImportError:
-        pytest.skip("Anthropic not installed")
-    
-    try:
-        client3 = LLMClient(provider="google", model="gemini-1.5-flash")
-        assert client3.provider_name == "google"
-    except ImportError:
-        pytest.skip("Google GenerativeAI not installed")
+    """Construct installed providers; unavailable providers give installation errors."""
+    providers = LLMClient.list_providers()
+    for name, model in [("openai", "gpt-4o-mini"), ("anthropic", "claude-3-haiku-20240307"),
+                        ("google", "gemini-1.5-flash"), ("groq", "llama-3.3-70b-versatile"),
+                        ("ollama", "llama3")]:
+        if providers[name]:
+            client = LLMClient(provider=name, model=model)
+            assert client.provider_name == name
+        else:
+            with pytest.raises(ImportError, match="not installed"):
+                LLMClient(provider=name, model=model)
 
 def test_llm_config_with_providers():
     """Test LLMConfig with different providers."""
@@ -135,24 +133,17 @@ def test_provider_usage_tracking():
     assert stats["total_cost_usd"] == 0.0
 
 @pytest.mark.asyncio
-async def test_openai_provider_generate_json():
-    """Test OpenAI provider JSON generation (requires API key)."""
-    try:
-        import os
-        if not os.getenv("OPENAI_API_KEY"):
-            pytest.skip("OPENAI_API_KEY not set")
-        
-        provider = OpenAIProvider(model="gpt-4o-mini")
-        result = await provider.generate_json(
-            "Return a JSON object with a 'test' key set to true"
-        )
-        
-        assert isinstance(result, dict)
-        # Should have some content (may not be exactly what we asked for due to retries)
-        assert len(result) > 0
-        
-    except Exception as e:
-        pytest.skip(f"API call failed: {e}")
+async def test_openai_provider_generate_json(monkeypatch):
+    """Exercise JSON generation without a live API call or silently skipped errors."""
+    provider = OpenAIProvider(model="gpt-4o-mini")
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"test": true}'))],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
+    )
+    request = AsyncMock(return_value=response)
+    monkeypatch.setattr(provider.client.chat.completions, "create", request)
+    assert await provider.generate_json("Return JSON") == {"test": True}
+    assert provider.get_usage_stats()["total_tokens"] == 15
 
 def test_llm_client_cost_stats():
     """Test cost statistics tracking (skips if no API key)."""

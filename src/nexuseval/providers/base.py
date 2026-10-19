@@ -9,6 +9,23 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime
+import json
+import functools
+from ..retry import retry_with_exponential_backoff
+
+
+def retry_provider_request(method):
+    """Apply an instance's retry settings to text and chat requests."""
+    @functools.wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        retry = retry_with_exponential_backoff(
+            max_retries=getattr(self, "max_retries", 3),
+            initial_delay=getattr(self, "retry_delay", 1.0),
+        )
+        return await retry(method)(self, *args, **kwargs)
+
+    return wrapped
+
 
 class LLMMessage(BaseModel):
     """Standard message format across all providers."""
@@ -48,6 +65,23 @@ class BaseLLMProvider(ABC):
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
+
+    async def _generate_json_with_retry(self, request):
+        """Retry requests and invalid JSON, and propagate exhausted failures."""
+        @retry_with_exponential_backoff(
+            max_retries=getattr(self, "max_retries", 3),
+            initial_delay=getattr(self, "retry_delay", 1.0),
+        )
+        async def call():
+            content = (await request()).strip()
+            if content.startswith("```"):
+                content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            result = json.loads(content)
+            if not isinstance(result, dict):
+                raise ValueError("Expected a JSON object from the LLM provider")
+            return result
+
+        return await call()
     
     @abstractmethod
     async def generate(self, prompt: str, **kwargs) -> str:

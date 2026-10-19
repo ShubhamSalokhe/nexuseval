@@ -1,21 +1,45 @@
 from abc import ABC, abstractmethod
+from typing import Optional
+from pydantic import BaseModel, Field
 from ..core import TestCase, MetricResult
 from ..llm import LLMClient
 from ..templates import FAITHFULNESS_PROMPT, RELEVANCE_PROMPT, COMPLETENESS_PROMPT
 
+class ScoreResponse(BaseModel):
+    score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    reason: str
+
+
 class BaseMetric(ABC):
-    def __init__(self, name: str, threshold: float = 0.5):
+    def __init__(self, name: str, threshold: float = 0.5, llm: Optional[LLMClient] = None):
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("threshold must be between 0 and 1")
         self.name = name
         self.threshold = threshold
-        self.llm = LLMClient()
+        self._llm = llm
+        self._llm_factory = LLMClient
+        self._verbose = None
+
+    @property
+    def llm(self) -> LLMClient:
+        # Rule-based metrics and missing-context checks need no API credentials.
+        if self._llm is None:
+            self._llm = self._llm_factory()
+        if getattr(self, "_verbose", None) is not None:
+            self._llm.verbose = self._verbose
+        return self._llm
+
+    @llm.setter
+    def llm(self, client: LLMClient):
+        self._llm = client
 
     @abstractmethod
     async def measure(self, test_case: TestCase) -> MetricResult:
         pass
 
 class Faithfulness(BaseMetric):
-    def __init__(self):
-        super().__init__("Faithfulness", threshold=0.7)
+    def __init__(self, threshold: float = 0.7, llm: Optional[LLMClient] = None):
+        super().__init__("Faithfulness", threshold, llm)
 
     async def measure(self, test_case: TestCase) -> MetricResult:
         if not test_case.retrieval_context:
@@ -28,19 +52,21 @@ class Faithfulness(BaseMetric):
         )
         
         # Call LLM
-        result = await self.llm.get_score(formatted_prompt)
-        score = result.get("score", 0.0)
+        result = ScoreResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=ScoreResponse)
+        )
+        score = result.score
         
         return MetricResult(
             metric_name=self.name,
             score=score,
-            reason=result.get("reason", "No reason"),
+            reason=result.reason,
             passed=score >= self.threshold
         )
 
 class AnswerRelevance(BaseMetric):
-    def __init__(self):
-        super().__init__("Answer Relevance", threshold=0.7)
+    def __init__(self, threshold: float = 0.7, llm: Optional[LLMClient] = None):
+        super().__init__("Answer Relevance", threshold, llm)
 
     async def measure(self, test_case: TestCase) -> MetricResult:
         formatted_prompt = RELEVANCE_PROMPT.format(
@@ -48,13 +74,15 @@ class AnswerRelevance(BaseMetric):
             output=test_case.actual_output
         )
         
-        result = await self.llm.get_score(formatted_prompt)
-        score = result.get("score", 0.0)
+        result = ScoreResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=ScoreResponse)
+        )
+        score = result.score
         
         return MetricResult(
             metric_name=self.name,
             score=score,
-            reason=result.get("reason", "No reason"),
+            reason=result.reason,
             passed=score >= self.threshold
         )
 
@@ -63,8 +91,8 @@ class Completeness(BaseMetric):
     """
     Checks if the LLM answered ALL parts of the user's question.
     """
-    def __init__(self):
-        super().__init__("Completeness", threshold=0.7)
+    def __init__(self, threshold: float = 0.7, llm: Optional[LLMClient] = None):
+        super().__init__("Completeness", threshold, llm)
 
     async def measure(self, test_case: TestCase) -> MetricResult:
         # Format the prompt using the user input and the model output
@@ -74,12 +102,14 @@ class Completeness(BaseMetric):
         )
         
         # Call the Async LLM Client
-        result = await self.llm.get_score(formatted_prompt)
-        score = result.get("score", 0.0)
+        result = ScoreResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=ScoreResponse)
+        )
+        score = result.score
         
         return MetricResult(
             metric_name=self.name,
             score=score,
-            reason=result.get("reason", "No reason provided"),
+            reason=result.reason,
             passed=score >= self.threshold
         )

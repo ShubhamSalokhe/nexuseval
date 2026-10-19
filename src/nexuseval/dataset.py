@@ -9,7 +9,7 @@ import json
 import csv
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from .core import TestCase
 
 class Dataset(BaseModel):
@@ -27,7 +27,8 @@ class Dataset(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     
-    @validator('test_cases')
+    @field_validator('test_cases')
+    @classmethod
     def validate_non_empty(cls, v):
         if not v:
             raise ValueError("Dataset must contain at least one test case")
@@ -51,6 +52,12 @@ class Dataset(BaseModel):
             Tuple of (train_dataset, test_dataset)
         """
         import random
+
+        if not 0.0 < train_ratio < 1.0:
+            raise ValueError("train_ratio must be between 0 and 1 (exclusive)")
+        split_idx = int(len(self.test_cases) * train_ratio)
+        if split_idx == 0 or split_idx == len(self.test_cases):
+            raise ValueError("Split must leave at least one test case in each dataset")
         
         cases = self.test_cases.copy()
         if shuffle:
@@ -122,11 +129,18 @@ class DatasetLoader:
                 data = json.load(f)
         
         # Handle different JSON structures
+        dataset_name = path.stem
+        description = None
         if isinstance(data, dict):
             # If root is dict, look for test_cases key or use as single case
             if "test_cases" in data:
                 test_cases_data = data["test_cases"]
-                metadata = {k: v for k, v in data.items() if k != "test_cases"}
+                metadata = {
+                    **{k: v for k, v in data.items() if k not in {"test_cases", "metadata", "name", "description"}},
+                    **data.get("metadata", {}),
+                }
+                dataset_name = data.get("name", path.stem)
+                description = data.get("description")
             else:
                 test_cases_data = [data]
                 metadata = {}
@@ -149,8 +163,8 @@ class DatasetLoader:
         return Dataset(
             test_cases=test_cases,
             metadata=metadata,
-            name=metadata.get("name", path.stem),
-            description=metadata.get("description")
+            name=dataset_name,
+            description=description
         )
     
     @staticmethod
@@ -244,7 +258,10 @@ class DatasetLoader:
             Dataset object
         """
         test_cases_data = data.get("test_cases", [])
-        metadata = {k: v for k, v in data.items() if k != "test_cases"}
+        metadata = {
+            **{k: v for k, v in data.items() if k not in {"test_cases", "metadata", "name", "description"}},
+            **data.get("metadata", {}),
+        }
         
         test_cases = [
             tc if isinstance(tc, TestCase) else TestCase(**tc)
@@ -254,8 +271,8 @@ class DatasetLoader:
         return Dataset(
             test_cases=test_cases,
             metadata=metadata,
-            name=metadata.get("name"),
-            description=metadata.get("description")
+            name=data.get("name"),
+            description=data.get("description")
         )
 
 

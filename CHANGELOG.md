@@ -5,6 +5,26 @@ All notable changes to NexusEval will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Add `Evaluator.evaluate_async()` for async applications and fix the async evaluation example.
+- Apply evaluator configuration, share configured clients, and bound task creation for large datasets.
+- Preserve metric pass/fail status and metadata, and cancel outstanding tasks on evaluation failure.
+- Initialize LLM and embedding API clients only when needed, and accept injected metric clients.
+- Honor provider generation defaults, endpoint URLs, timeouts, and consistent JSON retry counts.
+- Propagate provider failures and validate metric responses before caching to prevent false passes.
+- Correct bias/toxicity severity thresholds and cosine similarity scoring.
+- Fix optional provider availability detection and preserve Google chat system instructions and user messages.
+- Fix file-cache update eviction, capacity reduction, corrupt metadata recovery, atomic writes, TTL handling, and concurrent duplicate requests; move disk I/O off the event loop.
+- Coordinate file-cache eviction and metadata across instances and processes.
+- Cancel nested metric requests on failure and separate cached responses by validation schema.
+- Preserve dataset metadata on reload and reject invalid splits with clear errors.
+- Use the implemented file cache in the production preset; Redis remains unsupported.
+
+### Added
+- Offline regression tests, a development dependency extra, and CI for Python 3.9 and 3.12.
+
 ## [0.4.0] - 2025-12-17
 
 ### Added
@@ -101,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## Historical Roadmap (from v0.4.0)
 
 ### Planned for v0.5.0 - Advanced Metrics
 - Context Relevance metric (retrieval precision)
@@ -154,7 +174,7 @@ results = evaluator.evaluate([case])
 from nexuseval import DatasetLoader, Evaluator, Faithfulness, NexusConfig
 dataset = DatasetLoader.from_json("evals.json")
 config = NexusConfig.preset_development()  # Enables caching + cost tracking
-evaluator = Evaluator(metrics=[Faithfulness()])
+evaluator = Evaluator(metrics=[Faithfulness()], config=config)
 results = evaluator.evaluate(dataset.test_cases)
 ```
 

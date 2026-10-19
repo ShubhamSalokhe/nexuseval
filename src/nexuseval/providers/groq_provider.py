@@ -3,10 +3,8 @@ Groq provider implementation.
 """
 
 import os
-import json
-import asyncio
 from typing import Dict, Any, Optional, List
-from .base import BaseLLMProvider, LLMMessage, LLMResponse
+from .base import BaseLLMProvider, LLMMessage, LLMResponse, retry_provider_request
 
 try:
     from groq import AsyncGroq
@@ -57,12 +55,17 @@ class GroqProvider(BaseLLMProvider):
             )
         
         super().__init__(model, **kwargs)
-        self.client = AsyncGroq(api_key=api_key or os.getenv("GROQ_API_KEY"))
+        client_options = {key: kwargs[key] for key in ("base_url", "timeout") if kwargs.get(key) is not None}
+        self.client = AsyncGroq(
+            api_key=api_key or os.getenv("GROQ_API_KEY"), max_retries=0, **client_options
+        )
         self.max_retries = max_retries
         self.retry_delay = retry_delay
     
+    @retry_provider_request
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text completion."""
+        kwargs = {**self.config, **kwargs}
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -80,43 +83,27 @@ class GroqProvider(BaseLLMProvider):
         return response.choices[0].message.content
     
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Generate structured JSON output."""
-        for attempt in range(self.max_retries):
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=kwargs.get("temperature", 0.0),
-                    max_tokens=kwargs.get("max_tokens", 1024),
-                    response_format={"type": "json_object"}
-                )
-                
-                content = response.choices[0].message.content
-                result = json.loads(content)
-                
-                # Track usage
-                if hasattr(response, 'usage') and response.usage:
-                    self.update_usage(
-                        response.usage.prompt_tokens,
-                        response.usage.completion_tokens
-                    )
-                
-                return result
-                
-            except json.JSONDecodeError as e:
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"Invalid JSON response: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
-                
-            except Exception as e:
-                if attempt == self.max_retries - 1:
-                    return {"score": 0.0, "reason": f"Groq Error: {str(e)}"}
-                await asyncio.sleep(self.retry_delay * (2 ** attempt))
-        
-        return {"score": 0.0, "reason": "Max retries exceeded"}
-    
+        """Generate a JSON object, raising if all attempts fail."""
+        kwargs = {**self.config, **kwargs}
+
+        async def request():
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=kwargs.get("temperature", 0.0),
+                max_tokens=kwargs.get("max_tokens", 1024),
+                response_format={"type": "json_object"},
+            )
+            if response.usage:
+                self.update_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+            return response.choices[0].message.content
+
+        return await self._generate_json_with_retry(request)
+
+    @retry_provider_request
     async def chat(self, messages: List[LLMMessage], **kwargs) -> LLMResponse:
         """Chat completion with message history."""
+        kwargs = {**self.config, **kwargs}
         formatted_messages = [
             {"role": msg.role, "content": msg.content}
             for msg in messages

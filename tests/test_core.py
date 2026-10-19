@@ -4,14 +4,14 @@ Unit tests for core data models.
 
 import pytest
 from datetime import datetime
-from nexuseval.core import TestCase, MetricResult, EvaluationResult, MetricConfig
+from nexuseval.core import TestCase as EvaluationCase, MetricResult, EvaluationResult, MetricConfig
 
 class TestTestCase:
     """Test TestCase model."""
     
     def test_basic_creation(self):
         """Test creating a basic test case."""
-        tc = TestCase(
+        tc = EvaluationCase(
             input_text="What is 2+2?",
             actual_output="2+2 equals 4.",
         )
@@ -22,7 +22,7 @@ class TestTestCase:
     
     def test_with_context(self):
         """Test test case with retrieval context."""
-        tc = TestCase(
+        tc = EvaluationCase(
             input_text="What is the capital of France?",
             actual_output="Paris",
             retrieval_context=["France is in Europe", "Paris is the capital"]
@@ -32,7 +32,7 @@ class TestTestCase:
     
     def test_with_conversation_history(self):
         """Test test case with conversation history."""
-        tc = TestCase(
+        tc = EvaluationCase(
             input_text="And what about Germany?",
             actual_output="Berlin",
             conversation_history=[
@@ -45,7 +45,7 @@ class TestTestCase:
     
     def test_with_metadata(self):
         """Test test case with metadata."""
-        tc = TestCase(
+        tc = EvaluationCase(
             input_text="Test",
             actual_output="Response",
             metadata={"model": "gpt-4", "latency_ms": 250}
@@ -56,7 +56,7 @@ class TestTestCase:
     def test_validation_fails_missing_required(self):
         """Test that validation fails without required fields."""
         with pytest.raises(Exception):  # Pydantic ValidationError
-            TestCase(input_text="Only input")
+            EvaluationCase(input_text="Only input")
 
 
 class TestMetricResult:

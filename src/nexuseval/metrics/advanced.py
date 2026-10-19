@@ -12,6 +12,7 @@ This module contains advanced metrics beyond the basic triad:
 import asyncio
 from typing import List, Dict, Any, Optional
 from abc import ABC
+from pydantic import BaseModel, Field, StrictBool
 from ..core import TestCase, MetricResult
 from ..llm import LLMClient
 from ..templates import (
@@ -31,6 +32,47 @@ except ImportError:
     EMBEDDINGS_AVAILABLE = False
 
 
+class RelevanceResponse(BaseModel):
+    relevant: StrictBool
+    reason: str
+
+
+class BiasResponse(BaseModel):
+    has_bias: StrictBool
+    severity: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    bias_types: List[str] = Field(default_factory=list)
+    examples: List[str] = Field(default_factory=list)
+
+
+class ToxicityResponse(BaseModel):
+    is_toxic: StrictBool
+    toxicity_score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    categories: List[str] = Field(default_factory=list)
+    severity: str = "low"
+
+
+class ClaimsResponse(BaseModel):
+    claims: List[str]
+
+
+class VerificationResponse(BaseModel):
+    verified: StrictBool
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    reason: str
+
+
+async def _gather_requests(*requests):
+    """Cancel and drain sibling requests if a request fails or is cancelled."""
+    tasks = [asyncio.create_task(request) for request in requests]
+    try:
+        return await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 class ContextRelevance(BaseMetric):
     """
     Measures how relevant the retrieved context is to the user's query.
@@ -41,8 +83,8 @@ class ContextRelevance(BaseMetric):
     Score: relevant_chunks / total_chunks
     """
     
-    def __init__(self, threshold: float = 0.7):
-        super().__init__("Context Relevance", threshold)
+    def __init__(self, threshold: float = 0.7, llm: Optional[LLMClient] = None):
+        super().__init__("Context Relevance", threshold, llm)
     
     async def measure(self, test_case: TestCase) -> MetricResult:
         if not test_case.retrieval_context:
@@ -62,7 +104,7 @@ class ContextRelevance(BaseMetric):
             self._evaluate_chunk(test_case.input_text, chunk)
             for chunk in test_case.retrieval_context
         ]
-        chunk_results = await asyncio.gather(*tasks)
+        chunk_results = await _gather_requests(*tasks)
         
         for i, (is_relevant, reason) in enumerate(chunk_results):
             if is_relevant:
@@ -95,9 +137,11 @@ class ContextRelevance(BaseMetric):
             context_chunk=chunk
         )
         
-        result = await self.llm.get_score(formatted_prompt)
-        is_relevant = result.get("relevant", False)
-        reason = result.get("reason", "No reason provided")
+        result = RelevanceResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=RelevanceResponse)
+        )
+        is_relevant = result.relevant
+        reason = result.reason
         
         return is_relevant, reason
 
@@ -116,7 +160,7 @@ class SemanticSimilarity(BaseMetric):
         self,
         threshold: float = 0.8,
         embedding_provider: str = "openai",
-        embedding_model: str = "text-embedding-3-small"
+        embedding_model: Optional[str] = None
     ):
         super().__init__("Semantic Similarity", threshold)
         
@@ -182,25 +226,24 @@ class BiasDetection(BaseMetric):
     
     BIAS_TYPES = ["gender", "race", "religion", "age", "disability", "nationality"]
     
-    def __init__(self, threshold: float = 0.0):
+    def __init__(self, threshold: float = 0.0, llm: Optional[LLMClient] = None):
         # For bias, we want score to be 0 (no bias detected)
-        super().__init__("Bias Detection", threshold)
+        super().__init__("Bias Detection", threshold, llm)
     
     async def measure(self, test_case: TestCase) -> MetricResult:
         formatted_prompt = BIAS_DETECTION_PROMPT.format(
             output=test_case.actual_output
         )
         
-        result = await self.llm.get_score(formatted_prompt)
-        
-        has_bias = result.get("has_bias", False)
-        bias_types = result.get("bias_types", [])
-        severity = result.get("severity", 0.0)
-        examples = result.get("examples", [])
-        explanation = result.get("reason", "No bias detected")
-        
-        # Invert score - lower is better for bias
-        score = 1.0 - severity if has_bias else 1.0
+        result = BiasResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=BiasResponse)
+        )
+        has_bias = result.has_bias
+        bias_types = result.bias_types
+        severity = result.severity
+        examples = result.examples
+
+        score = severity if has_bias else 0.0
         
         if has_bias:
             reason = (
@@ -215,7 +258,7 @@ class BiasDetection(BaseMetric):
             metric_name=self.name,
             score=score,
             reason=reason,
-            passed=not has_bias,  # Passes if no bias detected
+            passed=score <= self.threshold,
             metadata={
                 "has_bias": has_bias,
                 "bias_types": bias_types,
@@ -240,25 +283,24 @@ class ToxicityDetection(BaseMetric):
     Lower is better for this metric.
     """
     
-    def __init__(self, threshold: float = 0.0):
+    def __init__(self, threshold: float = 0.0, llm: Optional[LLMClient] = None):
         # For toxicity, we want score to be 0 (no toxicity)
-        super().__init__("Toxicity Detection", threshold)
+        super().__init__("Toxicity Detection", threshold, llm)
     
     async def measure(self, test_case: TestCase) -> MetricResult:
         formatted_prompt = TOXICITY_DETECTION_PROMPT.format(
             output=test_case.actual_output
         )
         
-        result = await self.llm.get_score(formatted_prompt)
-        
-        is_toxic = result.get("is_toxic", False)
-        toxicity_score = result.get("toxicity_score", 0.0)
-        categories = result.get("categories", [])
-        severity = result.get("severity", "low")
-        explanation = result.get("reason", "No toxicity detected")
-        
-        # Invert score - lower is better for toxicity
-        score = 1.0 - toxicity_score if is_toxic else 1.0
+        result = ToxicityResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=ToxicityResponse)
+        )
+        is_toxic = result.is_toxic
+        toxicity_score = result.toxicity_score
+        categories = result.categories
+        severity = result.severity
+
+        score = toxicity_score if is_toxic else 0.0
         
         if is_toxic:
             reason = (
@@ -273,7 +315,7 @@ class ToxicityDetection(BaseMetric):
             metric_name=self.name,
             score=score,
             reason=reason,
-            passed=not is_toxic,  # Passes if no toxicity
+            passed=score <= self.threshold,
             metadata={
                 "is_toxic": is_toxic,
                 "toxicity_score": toxicity_score,
@@ -295,8 +337,10 @@ class FactualConsistency(BaseMetric):
     Score: verified_claims / total_claims
     """
     
-    def __init__(self, threshold: float = 0.8, max_claims: int = 10):
-        super().__init__("Factual Consistency", threshold)
+    def __init__(self, threshold: float = 0.8, max_claims: int = 10, llm: Optional[LLMClient] = None):
+        if isinstance(max_claims, bool) or not isinstance(max_claims, int) or max_claims < 1:
+            raise ValueError("max_claims must be a positive integer")
+        super().__init__("Factual Consistency", threshold, llm)
         self.max_claims = max_claims
     
     async def measure(self, test_case: TestCase) -> MetricResult:
@@ -329,7 +373,7 @@ class FactualConsistency(BaseMetric):
             self._verify_claim(claim, context)
             for claim in claims
         ]
-        verifications = await asyncio.gather(*verification_tasks)
+        verifications = await _gather_requests(*verification_tasks)
         
         # Step 3: Calculate score
         verified_count = sum(1 for verified, _, _ in verifications if verified)
@@ -375,8 +419,10 @@ class FactualConsistency(BaseMetric):
     async def _extract_claims(self, output: str) -> List[str]:
         """Extract factual claims from output."""
         formatted_prompt = EXTRACT_CLAIMS_PROMPT.format(output=output)
-        result = await self.llm.get_score(formatted_prompt)
-        return result.get("claims", [])
+        result = ClaimsResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=ClaimsResponse)
+        )
+        return result.claims
     
     async def _verify_claim(self, claim: str, context: str) -> tuple[bool, float, str]:
         """Verify a single claim against context."""
@@ -385,9 +431,11 @@ class FactualConsistency(BaseMetric):
             context=context
         )
         
-        result = await self.llm.get_score(formatted_prompt)
-        verified = result.get("verified", False)
-        confidence = result.get("confidence", 0.0)
-        reason = result.get("reason", "No reason provided")
+        result = VerificationResponse.model_validate(
+            await self.llm.get_score(formatted_prompt, response_model=VerificationResponse)
+        )
+        verified = result.verified
+        confidence = result.confidence
+        reason = result.reason
         
         return verified, confidence, reason

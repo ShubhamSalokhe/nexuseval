@@ -5,8 +5,8 @@ This module provides a unified interface for accessing multiple LLM providers
 (OpenAI, Anthropic, Google, Groq, Ollama) with intelligent caching and cost tracking.
 """
 
-import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Type
+from pydantic import BaseModel
 from .providers import LLMProviderRegistry, BaseLLMProvider
 from .config import LLMConfig
 
@@ -58,15 +58,7 @@ class LLMClient:
         if config:
             provider = config.provider
             model = config.model
-            kwargs.update({
-                "api_key": config.api_key,
-                "base_url": config.base_url,
-                "temperature": config.temperature,
-                "max_tokens": config.max_tokens,
-                "timeout": config.timeout,
-                "max_retries": config.max_retries,
-                "retry_delay": config.retry_delay,
-            })
+            kwargs.update(config.model_dump(exclude={"provider", "model"}))
             # Remove None values
             kwargs = {k: v for k, v in kwargs.items() if v is not None}
         
@@ -81,6 +73,10 @@ class LLMClient:
         self.provider_name = provider
         self.enable_cost_tracking = enable_cost_tracking
         self.verbose = verbose
+        self._cache_parameters = {
+            key: value for key, value in kwargs.items()
+            if key not in {"api_key", "timeout", "max_retries", "retry_delay"}
+        }
         
         # Caching
         self.enable_cache = enable_cache and CACHE_AVAILABLE
@@ -94,7 +90,7 @@ class LLMClient:
         else:
             self.cache_manager = None
     
-    async def get_score(self, prompt: str, **kwargs) -> Dict[str, Any]:
+    async def get_score(self, prompt: str, response_model: Optional[Type[BaseModel]] = None, **kwargs) -> Dict[str, Any]:
         """
         Generate structured JSON response from LLM.
         
@@ -103,6 +99,7 @@ class LLMClient:
         
         Args:
             prompt: The prompt to send (should request JSON format)
+            response_model: Optional Pydantic schema, validated before storing responses
             **kwargs: Additional generation parameters (temperature, max_tokens, etc.)
         
         Returns:
@@ -115,36 +112,35 @@ class LLMClient:
             ... )
             >>> print(result["score"])
         """
-        # Generate cache key if caching enabled
+        async def compute():
+            if self.verbose:
+                print(f"\n[NexusEval] 📤 Request to {self.provider_name}/{self.model}:\n{prompt}\n")
+            result = await self.provider.generate_json(prompt, **kwargs)
+            if not isinstance(result, dict):
+                raise ValueError("Expected a JSON object from the LLM provider")
+            if response_model is not None:
+                response_model.model_validate(result)
+            if self.verbose:
+                import json
+                print(f"\n[NexusEval] 📥 Response:\n{json.dumps(result, indent=2)}\n")
+            return result
+
         if self.enable_cache and self.cache_manager:
+            cache_parameters = {**self._cache_parameters, **kwargs}
+            if response_model is not None:
+                cache_parameters["_response_schema"] = response_model.model_json_schema()
             cache_key = self.cache_manager.generate_key(
                 prompt=prompt,
                 model=self.model,
                 provider=self.provider_name,
-                **kwargs
+                **cache_parameters,
             )
-            
-            # Try cache first
-            cached_result = await self.cache_manager.backend.get(cache_key)
-            if cached_result is not None:
-                return cached_result
-        
-        # Call provider
-        if self.verbose:
-            print(f"\n[NexusEval] 📤 Request to {self.provider_name}/{self.model}:\n{prompt}\n")
-            
-        result = await self.provider.generate_json(prompt, **kwargs)
+            result = await self.cache_manager.get_or_compute(cache_key, compute)
+            if response_model is not None:
+                response_model.model_validate(result)
+            return result
+        return await compute()
 
-        if self.verbose:
-            import json
-            print(f"\n[NexusEval] 📥 Response:\n{json.dumps(result, indent=2)}\n")
-        
-        # Cache result if caching enabled
-        if self.enable_cache and self.cache_manager:
-            await self.cache_manager.backend.set(cache_key, result)
-        
-        return result
-    
     async def generate(self, prompt: str, **kwargs) -> str:
         """
         Generate text completion.

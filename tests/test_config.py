@@ -162,7 +162,7 @@ class TestNexusConfig:
         """Test production preset."""
         config = NexusConfig.preset_production()
         assert config.llm.model == "gpt-4-turbo"  # Best model
-        assert config.cache.backend == "redis"
+        assert config.cache.backend == "file"
         assert config.evaluation.max_concurrency == 20
         assert config.reporting.verbose is False
     

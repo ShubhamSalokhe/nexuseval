@@ -10,9 +10,11 @@ __pycache__/
 htmlcov/
 
 # Virtual environments
+.venv/
 venv/
 env/
 .env
+.nexuseval_cache/
 
 # Distribution / Packaging
 dist/

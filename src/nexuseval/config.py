@@ -2,7 +2,7 @@
 Configuration management for NexusEval.
 
 Provides centralized configuration with support for:
-- Loading from YAML/JSON files
+- Loading from JSON files
 - Environment variable overrides
 - Validation with Pydantic
 - Preset configurations
@@ -12,12 +12,12 @@ import os
 import json
 from pathlib import Path
 from typing import Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class LLMConfig(BaseModel):
     """Configuration for LLM client."""
     
-    provider: Literal["openai", "anthropic", "google", "groq", "ollama"] = "openai"
+    provider: str = Field(default="openai", min_length=1)
     model: str = "gpt-4-turbo"
     api_key: Optional[str] = None
     
@@ -27,15 +27,14 @@ class LLMConfig(BaseModel):
     
     # Generation parameters
     temperature: float = 0.0
-    max_tokens: int = 1000
-    timeout: int = 30
+    max_tokens: int = Field(default=1000, ge=1)
+    timeout: int = Field(default=30, ge=1)
     
     # Retry configuration
-    max_retries: int = 3
-    retry_delay: float = 1.0
+    max_retries: int = Field(default=3, ge=0)
+    retry_delay: float = Field(default=1.0, ge=0.0)
     
-    class Config:
-        extra = "allow"  # Allow provider-specific extras
+    model_config = ConfigDict(extra="allow")
 
 
 class CacheConfig(BaseModel):
@@ -57,6 +56,7 @@ class CacheConfig(BaseModel):
     )
     ttl: Optional[int] = Field(
         default=None,
+        ge=0,
         description="Time to live in seconds (None = no expiration)"
     )
     cache_dir: str = Field(
@@ -84,7 +84,8 @@ class EvaluationConfig(BaseModel):
     )
     rate_limit_requests_per_minute: Optional[int] = Field(
         default=None,
-        description="Rate limit for API requests (None = no limit)"
+        ge=1,
+        description="Reserved for future provider rate limiting (currently not enforced)"
     )
     retry_attempts: int = Field(
         default=3,
@@ -104,7 +105,8 @@ class EvaluationConfig(BaseModel):
 
 class ReportingConfig(BaseModel):
     """
-    Configuration for reporting and output.
+    Output settings. Only verbose is currently used by Evaluator;
+    automatic report generation is reserved for a future release.
     """
     output_dir: str = Field(
         default="./results",
@@ -265,7 +267,7 @@ class NexusConfig(BaseModel):
         """
         Preset configuration for production.
         - Uses best models
-        - Redis caching (if available)
+        - Persistent file caching
         - Higher concurrency
         - Minimal output
         """
@@ -277,14 +279,13 @@ class NexusConfig(BaseModel):
             ),
             cache=CacheConfig(
                 enabled=True,
-                backend="redis",
+                backend="file",
                 max_size=10000,
                 ttl=86400  # 24 hours
             ),
             evaluation=EvaluationConfig(
                 enable_cost_tracking=True,
                 max_concurrency=20,
-                rate_limit_requests_per_minute=500,
                 retry_attempts=5,
                 progress_bar=False
             ),

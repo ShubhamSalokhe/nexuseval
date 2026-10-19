@@ -12,18 +12,18 @@ from nexuseval.dataset import (
     DatasetValidator,
     SampleDataGenerator
 )
-from nexuseval.core import TestCase
+from nexuseval.core import TestCase as EvaluationCase
 
 @pytest.fixture
 def sample_test_cases():
     """Fixture providing sample test cases."""
     return [
-        TestCase(
+        EvaluationCase(
             input_text="What is Python?",
             actual_output="A programming language",
             retrieval_context=["Python is used for AI"]
         ),
-        TestCase(
+        EvaluationCase(
             input_text="What is Java?",
             actual_output="A programming language",
             retrieval_context=["Java is used for enterprise apps"]
@@ -91,7 +91,7 @@ class TestDatasetLoader:
         ]
         dataset = DatasetLoader.from_list(data, name="dict_dataset")
         assert len(dataset) == 2
-        assert isinstance(dataset[0], TestCase)
+        assert isinstance(dataset[0], EvaluationCase)
     
     def test_from_json(self, tmp_path, sample_test_cases):
         """Test loading dataset from JSON file."""
@@ -167,7 +167,7 @@ class TestDatasetValidator:
         """Test validation catches empty input_text."""
         dataset = Dataset(
             test_cases=[
-                TestCase(input_text="", actual_output="Some output")
+                EvaluationCase(input_text="", actual_output="Some output")
             ]
         )
         validator = DatasetValidator()
@@ -179,7 +179,7 @@ class TestDatasetValidator:
         """Test validation for required context."""
         dataset = Dataset(
             test_cases=[
-                TestCase(
+                EvaluationCase(
                     input_text="Question",
                     actual_output="Answer"
                     # No retrieval_context
@@ -195,9 +195,9 @@ class TestDatasetValidator:
         """Test duplicate detection."""
         dataset = Dataset(
             test_cases=[
-                TestCase(input_text="Question 1", actual_output="Answer 1"),
-                TestCase(input_text="Question 2", actual_output="Answer 2"),
-                TestCase(input_text="Question 1", actual_output="Answer 3"),  # Duplicate
+                EvaluationCase(input_text="Question 1", actual_output="Answer 1"),
+                EvaluationCase(input_text="Question 2", actual_output="Answer 2"),
+                EvaluationCase(input_text="Question 1", actual_output="Answer 3"),  # Duplicate
             ]
         )
         validator = DatasetValidator()
@@ -221,3 +221,27 @@ class TestSampleDataGenerator:
             assert tc.actual_output
             assert tc.retrieval_context
             assert tc.test_case_id
+
+
+@pytest.mark.parametrize("loader", ["json", "dict"])
+def test_dataset_model_dump_roundtrip_preserves_metadata(sample_test_cases, tmp_path, loader):
+    original = Dataset(test_cases=sample_test_cases, name="roundtrip", description="Description", metadata={"version": 2})
+    if loader == "json":
+        path = tmp_path / "data.json"
+        path.write_text(original.model_dump_json())
+        loaded = DatasetLoader.from_json(path)
+    else:
+        loaded = DatasetLoader.from_dict(original.model_dump())
+    assert loaded.model_dump() == original.model_dump()
+
+
+@pytest.mark.parametrize("ratio", [-0.1, 0.0, 1.0, 1.1, float("nan")])
+def test_split_rejects_invalid_ratios(sample_dataset, ratio):
+    with pytest.raises(ValueError, match="train_ratio"):
+        sample_dataset.split(train_ratio=ratio)
+
+
+def test_split_rejects_empty_partition(sample_test_cases):
+    dataset = Dataset(test_cases=sample_test_cases[:1])
+    with pytest.raises(ValueError, match="at least one"):
+        dataset.split()

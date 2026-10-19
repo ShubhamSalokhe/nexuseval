@@ -3,10 +3,8 @@ Anthropic provider implementation.
 """
 
 import os
-import json
-import asyncio
 from typing import Dict, Any, Optional, List
-from .base import BaseLLMProvider, LLMMessage, LLMResponse
+from .base import BaseLLMProvider, LLMMessage, LLMResponse, retry_provider_request
 
 try:
     from anthropic import AsyncAnthropic
@@ -57,12 +55,17 @@ class AnthropicProvider(BaseLLMProvider):
             )
         
         super().__init__(model, **kwargs)
-        self.client = AsyncAnthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        client_options = {key: kwargs[key] for key in ("base_url", "timeout") if kwargs.get(key) is not None}
+        self.client = AsyncAnthropic(
+            api_key=api_key or os.getenv("ANTHROPIC_API_KEY"), max_retries=0, **client_options
+        )
         self.max_retries = max_retries
         self.retry_delay = retry_delay
     
+    @retry_provider_request
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text completion."""
+        kwargs = {**self.config, **kwargs}
         response = await self.client.messages.create(
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 1024),
@@ -80,60 +83,27 @@ class AnthropicProvider(BaseLLMProvider):
         return response.content[0].text
     
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """
-        Generate structured JSON output.
-        
-        Note: Claude doesn't have native JSON mode, so we use prompt engineering.
-        """
-        from ..retry import retry_with_exponential_backoff
+        """Generate a JSON object, raising if all attempts fail."""
+        kwargs = {**self.config, **kwargs}
 
-        system_prompt = (
-            "You must respond with valid JSON only. "
-            "Do not include any explanatory text before or after the JSON. "
-            "Your entire response must be parseable as JSON."
-        )
-        
-        @retry_with_exponential_backoff(
-            max_retries=self.max_retries,
-            initial_delay=self.retry_delay,
-            errors=(json.JSONDecodeError, Exception),
-            on_error=lambda e, attempt: print(f"Retry attempt {attempt} due to: {str(e)}")
-        )
-        async def _call_api():
+        async def request():
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=kwargs.get("max_tokens", 1024),
-                system=system_prompt,
+                system="Respond with valid JSON only, without explanatory text or markdown.",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=kwargs.get("temperature", 0.0),
             )
-            
-            content = response.content[0].text
-            
-            # Try to extract JSON if wrapped in markdown code blocks
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            
-            result = json.loads(content)
-            
-            # Track usage
-            if hasattr(response, 'usage'):
-                self.update_usage(
-                    response.usage.input_tokens,
-                    response.usage.output_tokens
-                )
-            
-            return result
+            if response.usage:
+                self.update_usage(response.usage.input_tokens, response.usage.output_tokens)
+            return response.content[0].text
 
-        try:
-            return await _call_api()
-        except Exception as e:
-            return {"score": 0.0, "reason": f"Failed after retries: {str(e)}"}
-    
+        return await self._generate_json_with_retry(request)
+
+    @retry_provider_request
     async def chat(self, messages: List[LLMMessage], **kwargs) -> LLMResponse:
         """Chat completion with message history."""
+        kwargs = {**self.config, **kwargs}
         # Claude requires alternating user/assistant messages
         formatted_messages = []
         system_messages = []
@@ -147,12 +117,12 @@ class AnthropicProvider(BaseLLMProvider):
                     "content": msg.content
                 })
         
-        system_prompt = " ".join(system_messages) if system_messages else None
+        system_options = {"system": "\n".join(system_messages)} if system_messages else {}
         
         response = await self.client.messages.create(
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 1024),
-            system=system_prompt,
+            **system_options,
             messages=formatted_messages,
             temperature=kwargs.get("temperature", 0.0),
         )

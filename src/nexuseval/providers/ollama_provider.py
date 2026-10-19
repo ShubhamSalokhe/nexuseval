@@ -2,10 +2,8 @@
 Ollama provider implementation for local models.
 """
 
-import json
-import asyncio
 from typing import Dict, Any, Optional, List
-from .base import BaseLLMProvider, LLMMessage, LLMResponse
+from .base import BaseLLMProvider, LLMMessage, LLMResponse, retry_provider_request
 
 try:
     import aiohttp
@@ -52,9 +50,13 @@ class OllamaProvider(BaseLLMProvider):
         super().__init__(model, **kwargs)
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        self.max_retries = kwargs.get("max_retries", 3)
+        self.retry_delay = kwargs.get("retry_delay", 1.0)
     
+    @retry_provider_request
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text completion."""
+        kwargs = {**self.config, **kwargs}
         async with aiohttp.ClientSession() as session:
             payload = {
                 "model": self.model,
@@ -71,6 +73,7 @@ class OllamaProvider(BaseLLMProvider):
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=self.timeout)
             ) as response:
+                response.raise_for_status()
                 result = await response.json()
                 
                 # Track usage (approximate)
@@ -83,46 +86,37 @@ class OllamaProvider(BaseLLMProvider):
                 return result.get("response", "")
     
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Generate structured JSON output."""
-        async with aiohttp.ClientSession() as session:
-            payload = {
-                "model": self.model,
-                "prompt": prompt,
-                "format": "json",  # Ollama's JSON mode
-                "stream": False,
-                "options": {
-                    "temperature": kwargs.get("temperature", 0.0),
-                    "num_predict": kwargs.get("max_tokens", 1024),
+        """Generate a JSON object, raising on HTTP errors or exhausted retries."""
+        kwargs = {**self.config, **kwargs}
+
+        async def request():
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": self.model,
+                    "prompt": prompt,
+                    "format": "json",
+                    "stream": False,
+                    "options": {
+                        "temperature": kwargs.get("temperature", 0.0),
+                        "num_predict": kwargs.get("max_tokens", 1024),
+                    },
                 }
-            }
-            
-            try:
                 async with session.post(
                     f"{self.base_url}/api/generate",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout)
+                    timeout=aiohttp.ClientTimeout(total=self.timeout),
                 ) as response:
+                    response.raise_for_status()
                     result = await response.json()
-                    
-                    content = result.get("response", "{}")
-                    parsed = json.loads(content)
-                    
-                    # Track usage (approximate)
-                    if "prompt_eval_count" in result and "eval_count" in result:
-                        self.update_usage(
-                            result.get("prompt_eval_count", 0),
-                            result.get("eval_count", 0)
-                        )
-                    
-                    return parsed
-                    
-            except json.JSONDecodeError as e:
-                return {"score": 0.0, "reason": f"Invalid JSON response: {str(e)}"}
-            except Exception as e:
-                return {"score": 0.0, "reason": f"Ollama Error: {str(e)}"}
-    
+                    self.update_usage(result.get("prompt_eval_count", 0), result.get("eval_count", 0))
+                    return result["response"]
+
+        return await self._generate_json_with_retry(request)
+
+    @retry_provider_request
     async def chat(self, messages: List[LLMMessage], **kwargs) -> LLMResponse:
         """Chat completion with message history."""
+        kwargs = {**self.config, **kwargs}
         formatted_messages = [
             {"role": msg.role, "content": msg.content}
             for msg in messages
@@ -144,6 +138,7 @@ class OllamaProvider(BaseLLMProvider):
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=self.timeout)
             ) as response:
+                response.raise_for_status()
                 result = await response.json()
                 
                 content = result.get("message", {}).get("content", "")

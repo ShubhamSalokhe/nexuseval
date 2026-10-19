@@ -35,7 +35,7 @@ class EmbeddingClient:
     def __init__(
         self,
         provider: str = "openai",
-        model: str = "text-embedding-3-small",
+        model: Optional[str] = None,
         api_key: Optional[str] = None
     ):
         """
@@ -49,14 +49,17 @@ class EmbeddingClient:
             api_key: OpenAI API key (optional, uses env var if not provided)
         """
         self.provider = provider
-        self.model = model
+        self.model = model or (
+            "all-MiniLM-L6-v2" if provider == "local" else "text-embedding-3-small"
+        )
+        self.api_key = api_key
+        self._client = None
         
         if provider == "openai":
             if not OPENAI_AVAILABLE:
                 raise ImportError(
                     "OpenAI not installed. Install with: pip install openai"
                 )
-            self.client = AsyncOpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
         
         elif provider == "local":
             if not SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -64,10 +67,20 @@ class EmbeddingClient:
                     "sentence-transformers not installed. "
                     "Install with: pip install sentence-transformers"
                 )
-            self.client = SentenceTransformer(model)
+            self.client = SentenceTransformer(self.model)
         
         else:
             raise ValueError(f"Unknown provider: {provider}. Use 'openai' or 'local'")
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = AsyncOpenAI(api_key=self.api_key or os.getenv("OPENAI_API_KEY"))
+        return self._client
+
+    @client.setter
+    def client(self, client):
+        self._client = client
     
     async def embed(self, texts: List[str]) -> np.ndarray:
         """
@@ -141,9 +154,8 @@ class EmbeddingClient:
         
         similarity = dot_product / (norm1 * norm2)
         
-        # Ensure result is in [0, 1] range (can be negative for opposite vectors)
-        # For similarity metrics, we typically want 0-1
-        return float(max(0.0, min(1.0, (similarity + 1) / 2)))
+        # Clamp negative cosine values; orthogonal vectors should score zero.
+        return float(max(0.0, min(1.0, similarity)))
     
     def __repr__(self) -> str:
         return f"EmbeddingClient(provider='{self.provider}', model='{self.model}')"
@@ -154,7 +166,7 @@ async def calculate_semantic_similarity(
     text1: str,
     text2: str,
     provider: str = "openai",
-    model: str = "text-embedding-3-small"
+    model: Optional[str] = None
 ) -> float:
     """
     Quick function to calculate semantic similarity between two texts.

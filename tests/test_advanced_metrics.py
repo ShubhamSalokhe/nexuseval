@@ -4,7 +4,7 @@ Tests for advanced evaluation metrics.
 
 import pytest
 import asyncio
-from nexuseval.core import TestCase, MetricResult
+from nexuseval.core import TestCase as EvaluationCase, MetricResult
 
 # Import advanced metrics if available
 try:
@@ -34,7 +34,7 @@ class TestContextRelevance:
     async def test_basic_functionality(self):
         metric = ContextRelevance(threshold=0.7)
         
-        test_case = TestCase(
+        test_case = EvaluationCase(
             input_text="What is the capital of France?",
             actual_output="Paris is the capital of France.",
             retrieval_context=[
@@ -54,7 +54,7 @@ class TestContextRelevance:
     def test_no_context(self):
         metric = ContextRelevance()
         
-        test_case = TestCase(
+        test_case = EvaluationCase(
             input_text="What is AI?",
             actual_output="AI is artificial intelligence."
         )
@@ -79,7 +79,7 @@ class TestBiasDetection:
         metric = BiasDetection()
         
         # Test case with potentially biased content
-        test_case = TestCase(
+        test_case = EvaluationCase(
             input_text="Tell me about engineers",
             actual_output="Engineers are typically men who work with computers."
         )
@@ -102,7 +102,7 @@ class TestToxicityDetection:
     async def test_clean_content(self):
         metric = ToxicityDetection()
         
-        test_case = TestCase(
+        test_case = EvaluationCase(
             input_text="What is Python?",
             actual_output="Python is a high-level programming language known for its simplicity."
         )
@@ -125,7 +125,7 @@ class TestFactualConsistency:
     async def test_with_context(self):
         metric = FactualConsistency()
         
-        test_case = TestCase(
+        test_case = EvaluationCase(
             input_text="Who invented Python?",
             actual_output="Python was created by Guido van Rossum in 1991.",
             retrieval_context=[
@@ -252,7 +252,7 @@ class TestSemanticSimilarity:
             
             metric = SemanticSimilarity()
             
-            test_case = TestCase(
+            test_case = EvaluationCase(
                 input_text="What is AI?",
                 actual_output="AI is artificial intelligence."
                 # No expected_output

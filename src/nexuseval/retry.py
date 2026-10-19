@@ -23,6 +23,11 @@ def retry_with_exponential_backoff(
         on_error: Optional callback function invoked when an error occurs.
                   Signature: on_error(exception, attempt_number)
     """
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+        raise ValueError("max_retries must be a non-negative integer")
+    if initial_delay < 0 or backoff_factor < 0:
+        raise ValueError("Retry delays and backoff_factor must be non-negative")
+
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):

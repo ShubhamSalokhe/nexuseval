@@ -22,7 +22,9 @@ def _lazy_load_anthropic():
     global _ANTHROPIC_AVAILABLE
     if not _ANTHROPIC_AVAILABLE:
         try:
-            from .anthropic_provider import AnthropicProvider
+            from .anthropic_provider import AnthropicProvider, ANTHROPIC_AVAILABLE
+            if not ANTHROPIC_AVAILABLE:
+                return False
             _PROVIDER_CLASSES["anthropic"] = AnthropicProvider
             _ANTHROPIC_AVAILABLE = True
         except ImportError:
@@ -34,7 +36,9 @@ def _lazy_load_google():
     global _GOOGLE_AVAILABLE
     if not _GOOGLE_AVAILABLE:
         try:
-            from .google_provider import GoogleProvider
+            from .google_provider import GoogleProvider, GOOGLE_AVAILABLE
+            if not GOOGLE_AVAILABLE:
+                return False
             _PROVIDER_CLASSES["google"] = GoogleProvider
             _GOOGLE_AVAILABLE = True
         except ImportError:
@@ -46,7 +50,9 @@ def _lazy_load_groq():
     global _GROQ_AVAILABLE
     if not _GROQ_AVAILABLE:
         try:
-            from .groq_provider import GroqProvider
+            from .groq_provider import GroqProvider, GROQ_AVAILABLE
+            if not GROQ_AVAILABLE:
+                return False
             _PROVIDER_CLASSES["groq"] = GroqProvider
             _GROQ_AVAILABLE = True
         except ImportError:
@@ -58,7 +64,9 @@ def _lazy_load_ollama():
     global _OLLAMA_AVAILABLE
     if not _OLLAMA_AVAILABLE:
         try:
-            from .ollama_provider import OllamaProvider
+            from .ollama_provider import OllamaProvider, AIOHTTP_AVAILABLE
+            if not AIOHTTP_AVAILABLE:
+                return False
             _PROVIDER_CLASSES["ollama"] = OllamaProvider
             _OLLAMA_AVAILABLE = True
         except ImportError:
@@ -126,6 +134,12 @@ class LLMProviderRegistry:
         
         if name in _PROVIDER_CLASSES:
             return _PROVIDER_CLASSES[name]
+
+        if name in {"anthropic", "google", "groq", "ollama"}:
+            raise ImportError(
+                f"Provider '{name}' is not installed. "
+                f"{cls.get_installation_instructions(name)}"
+            )
         
         available = list(_PROVIDER_CLASSES.keys()) + list(cls._custom_providers.keys())
         raise ValueError(
