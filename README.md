@@ -561,7 +561,7 @@ Built with ❤️ for the AI evaluation community. Special thanks to:
 
 ## 📈 Stats
 
-- **Version:** 0.5.0
+- **Version:** 0.5.1
 - **Python:** 3.9+
 - **License:** MIT
 - **Tests:** Offline suite in [tests/](tests/)
